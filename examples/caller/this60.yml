@@ -1,0 +1,27 @@
+# Drop this into a working repo at .github/workflows/this60.yml
+#
+# The entire footprint a working repo needs (plus the CLAUDE_CODE_OAUTH_TOKEN
+# secret and the .this60/ files — see CONTRACT.md). Pin the engine to a tag
+# (@v1) so upgrades are deliberate.
+
+name: This60 Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_tasks:
+        description: "Max tasks this run (0 = no cap)"
+        type: number
+        default: 0
+  # OPTIONAL, opt-in only — uncomment to add a weekly sweep:
+  # schedule:
+  #   - cron: "0 18 * * 5"
+
+jobs:
+  loop:
+    uses: gregoryallenedwards/this60-agent/.github/workflows/agent-loop.yml@v1
+    with:
+      # On scheduled runs there is no input, so default to 0 (no cap).
+      max_tasks: ${{ inputs.max_tasks || 0 }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

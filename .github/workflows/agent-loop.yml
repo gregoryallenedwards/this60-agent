@@ -1,0 +1,209 @@
+name: This60 Agent Loop
+
+# Reusable engine. A working repo calls this with:
+#   uses: gregoryallenedwards/this60-agent/.github/workflows/agent-loop.yml@v1
+# See examples/caller/this60.yml for the caller, and CONTRACT.md for the
+# app/engine interface this implements.
+
+on:
+  workflow_call:
+    inputs:
+      max_tasks:
+        description: "Max tasks to process this run (0 = no cap). CONTRACT.md §4."
+        type: number
+        required: false
+        default: 0
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "Claude Code subscription OAuth token (from `claude setup-token`). Never an API key."
+        required: true
+
+# The engine/brain version callers receive. MUST match the release tag this
+# file is published under (e.g. file at @v1 pins v1). Bumped at release time.
+env:
+  ENGINE_REPO: gregoryallenedwards/this60-agent
+  ENGINE_REF: v1
+  ENGINE_DIR: .this60-engine
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Preflight: one cheap runner. Selects work (no AI) and, only if there IS
+  # work, validates the token. An empty queue costs ~1 min and zero model use.
+  # --------------------------------------------------------------------------
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has_tasks: ${{ steps.select.outputs.has_tasks }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Checkout working repo
+        uses: actions/checkout@v4
+
+      - name: Checkout engine + brain
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: ${{ env.ENGINE_DIR }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: List open This60 PR branches
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr list --state open --json headRefName \
+            --jq '.[].headRefName | select(startswith("this60/"))' \
+            > open_branches.txt || true
+          echo "Open this60/* PRs:"; cat open_branches.txt || true
+
+      - name: Select queued tasks
+        id: select
+        env:
+          MAX_TASKS: ${{ inputs.max_tasks }}
+        run: |
+          export OPEN_PR_BRANCHES="$(cat open_branches.txt 2>/dev/null || true)"
+          node "${ENGINE_DIR}/select/run.mjs" ".this60/main.md"
+
+      # Auth-ping: prove the subscription token is VALID (not just present)
+      # before any per-task runners fan out (CONTRACT.md §7). Skipped entirely
+      # when the queue is empty, so empty sweeps spend no model quota.
+      # VERIFY (Phase 2): exact behavior/exit of a no-op claude-code-action call.
+      - name: Auth-ping (validate token)
+        if: steps.select.outputs.has_tasks == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "Reply with the single word READY. Do not use any tools."
+          claude_args: "--max-turns 1"
+
+  # --------------------------------------------------------------------------
+  # Task: one runner per selected task (matrix). The AI worker edits files and
+  # runs tests ONLY; all git (branch/commit/push/PR) is done by scripted steps
+  # after the worker exits — it never touches main (CONTRACT.md §3, §5; D1).
+  # --------------------------------------------------------------------------
+  task:
+    needs: preflight
+    if: needs.preflight.outputs.has_tasks == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.matrix) }}
+    steps:
+      - name: Checkout working repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create task branch
+        env:
+          TASK_BRANCH: ${{ matrix.branch }}
+        run: |
+          git config user.name "this60-agent[bot]"
+          git config user.email "this60-agent[bot]@users.noreply.github.com"
+          git checkout -b "$TASK_BRANCH"
+
+      - name: Checkout engine + brain
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: ${{ env.ENGINE_DIR }}
+
+      # The AI worker. Forbidden from git/PR; only Edit/Read/Write/Bash so it
+      # can implement, run the repo's tests, and edit .this60/main.md.
+      - name: Run the CI agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 40 --allowedTools Edit,Read,Write,Bash"
+          prompt: |
+            You are the This60 CI agent working on ONE task in this repository.
+            Do NOT run git and do NOT open a pull request — scripted steps after
+            you finish handle all git. Your job is to change files and report.
+
+            TASK
+              id:   ${{ matrix.id }}
+              desc: ${{ matrix.desc }}
+
+            STEP 1 — Resolve the activity.
+            Read ${{ env.ENGINE_DIR }}/index.json. Match this task's description
+            to exactly ONE activity entry and open its playbook under
+            ${{ env.ENGINE_DIR }}/. If nothing matches well this is NOVEL: do not
+            invent a process — jump to STEP 5 with outcome "novel".
+
+            STEP 2 — Do the CODE steps.
+            Follow the matched playbook. Implement only the steps it marks CODE.
+            Steps it marks BLOCKED CODE or COWORK: do NOT attempt them — collect
+            them for STEP 4.
+
+            STEP 3 — QA.
+            Read .this60/THIS60.md for this repo's test command and run it. If
+            tests fail and you cannot fix them, use outcome "blocked".
+
+            STEP 4 — De-queue and emit leftovers (edit .this60/main.md).
+            On the task line for id ${{ matrix.id }}: check the box ([ ] → [x]),
+            remove "queue:agent", and remove any stale "stub:true".
+            For each BLOCKED CODE or COWORK step, append a NEW task line that is
+            NOT enqueued (no queue:agent), noting what blocked it (blocked code)
+            and linking back to parent id ${{ matrix.id }}.
+
+            STEP 5 — Write the outcome file .this60/agent-status.json:
+              { "id": "${{ matrix.id }}",
+                "outcome": "implemented" | "blocked" | "novel" | "noop",
+                "summary": "<one paragraph: what changed and how you tested>",
+                "emitted": ["<descriptions of any new tasks you added>"] }
+
+      # Scripted, deterministic, AI-off. Guarantees one clean PR per task.
+      - name: Commit, push, open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK_ID: ${{ matrix.id }}
+          TASK_DESC: ${{ matrix.desc }}
+          TASK_BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          status_file=".this60/agent-status.json"
+          outcome="$(jq -r '.outcome // "noop"' "$status_file" 2>/dev/null || echo noop)"
+          summary="$(jq -r '.summary // ""' "$status_file" 2>/dev/null || echo "")"
+
+          # Never commit the engine checkout or the internal status file.
+          rm -rf "${ENGINE_DIR}" "$status_file"
+          git add -A
+
+          if git diff --cached --quiet; then
+            {
+              echo "### Task ${TASK_ID} — no PR (outcome: ${outcome})"
+              echo "The agent produced no file changes."
+              echo ""
+              echo "${summary}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "No changes (outcome=${outcome}); no PR opened."
+            exit 0
+          fi
+
+          git commit -m "this60: ${TASK_DESC} (${TASK_ID})" \
+                     -m "Outcome: ${outcome}" -m "${summary}"
+          git push -u origin "${TASK_BRANCH}"
+
+          default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+          body="$(printf '**Task:** %s — %s\n**Outcome:** %s\n\n%s\n' \
+            "${TASK_ID}" "${TASK_DESC}" "${outcome}" "${summary}")"
+          gh pr create --title "this60: ${TASK_DESC}" --body "${body}" \
+            --head "${TASK_BRANCH}" --base "${default_branch}" \
+          || gh pr edit --body "${body}"
+
+          {
+            echo "### Task ${TASK_ID} — PR opened (outcome: ${outcome})"
+            echo "${summary}"
+          } >> "$GITHUB_STEP_SUMMARY"
