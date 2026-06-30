@@ -24,9 +24,21 @@ line carries a trailing HTML comment holding its machine-readable fields:
 |--------------|-------------------------------------------------------------------------|
 | `- [ ]`/`- [x]` | Checkbox. Unchecked = open. Checked = done.                          |
 | `id`         | Stable, unique key for the task. Never reused. Drives branch/PR linkage.|
-| `desc`       | Human-readable description. The agent classifies the work from this.     |
+| `desc`       | Legacy description token. May be present in existing data; the engine **ignores it** and reads the description from the **visible checklist text** instead (see below). |
 | `queue:agent`| **Authoritative** "act on this" marker. Its presence = the user wants it done. |
 | `stub:true`  | **App-side only** (see below). Not a selection criterion.                |
+
+### Description source & backward compatibility
+
+The description the agent classifies from is the **visible checklist text** (the words
+between `]` and the comment), not a comment token. The parser reads the comment
+**tolerantly**: it extracts the machine tokens it knows (`id`, `queue:agent`, `stub`) and
+ignores everything else — including a legacy `desc:` field and any spaces it spills.
+
+This means the **existing on-disk format is preserved with no migration**: lines that carry
+`desc:…` in the comment keep selecting correctly (the `desc` spillover becomes harmless
+ignored tokens), and lines without it work identically. The app need not change, and live
+repos are untouched.
 
 ### `stub` is app-side only
 

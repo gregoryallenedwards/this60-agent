@@ -9,6 +9,10 @@ const fixture = readFileSync(
   fileURLToPath(new URL("./fixtures/sample-main.md", import.meta.url)),
   "utf8",
 );
+const legacy = readFileSync(
+  fileURLToPath(new URL("./fixtures/legacy-main.md", import.meta.url)),
+  "utf8",
+);
 
 test("parseTokens: key:value, flags, and queue:agent", () => {
   const t = parseTokens("id:t_4f2a queue:agent stub:true bare");
@@ -78,6 +82,29 @@ test("selectTasks: max_tasks caps and surfaces the overflow", () => {
 test("selectTasks: default is no cap (infinite)", () => {
   const { selected } = selectTasks({ markdown: fixture });
   assert.equal(selected.length, 4);
+});
+
+test("backward-compat: legacy desc:-in-comment format still selects", () => {
+  const { selected } = selectTasks({ markdown: legacy });
+  // t_4f2a selected; t_1009 checked → ignored; t_2f30 selected (stub ignored);
+  // t_9090 not enqueued → ignored.
+  assert.deepEqual(selected.map((s) => s.id), ["t_4f2a", "t_2f30"]);
+});
+
+test("backward-compat: description comes from visible text, not the desc: token", () => {
+  const t = parseLine(
+    "- [ ] Add CSV export  <!-- id:t_4f2a desc:Add CSV export queue:agent -->",
+  );
+  assert.equal(t.text, "Add CSV export"); // visible text, not the spilled token
+  assert.equal(t.id, "t_4f2a");
+  assert.equal(t.queued, true);
+});
+
+test("edge: a colon-word in the visible text cannot inject a token", () => {
+  // The comment is the only token source; visible text is never parsed for tokens.
+  const t = parseLine("- [ ] document the queue:agent marker  <!-- id:t_x -->");
+  assert.equal(t.queued, false); // 'queue:agent' in the prose does NOT enqueue it
+  assert.equal(t.id, "t_x");
 });
 
 test("toMatrix: emits include[] with id/desc/branch only", () => {
