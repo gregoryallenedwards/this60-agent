@@ -1,0 +1,18 @@
+{
+  "version": "1",
+  "note": "Activity -> playbook map (the brain's table of contents). The CI agent reads this, semantically matches a task's description to exactly ONE activity by its `match` sentence, and follows the named playbook. No confident match => the agent declares the task NOVEL and stops for a human (no auto write-back).",
+  "activities": [
+    {
+      "id": "add-feature",
+      "title": "Add a feature to an existing app",
+      "match": "Add or change a user-facing capability in a Flutter app that already exists and builds.",
+      "playbook": "processes/add-feature.md"
+    },
+    {
+      "id": "scaffold-app",
+      "title": "Scaffold a brand-new app",
+      "match": "The repo is empty or has no Flutter app yet; stand up the initial project and its This60 wiring.",
+      "playbook": "processes/scaffold-app.md"
+    }
+  ]
+}
