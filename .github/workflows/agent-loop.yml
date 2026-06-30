@@ -18,11 +18,13 @@ on:
         description: "Claude Code subscription OAuth token (from `claude setup-token`). Never an API key."
         required: true
 
-# The engine/brain version callers receive. MUST match the release tag this
-# file is published under (e.g. file at @v1 pins v1). Bumped at release time.
+# The brain is always checked out at the SAME commit as this engine workflow,
+# whatever ref the caller pinned (@v1, a branch, or a SHA). github.job_workflow_sha
+# is the commit of the reusable workflow file being run, so engine and brain can
+# never drift — and no release tag is required to test from a branch.
 env:
   ENGINE_REPO: gregoryallenedwards/this60-agent
-  ENGINE_REF: v1
+  ENGINE_REF: ${{ github.job_workflow_sha }}
   ENGINE_DIR: .this60-engine
 
 jobs:
