@@ -7,7 +7,8 @@ enabled later.
 
 ## COWORK — human-only (the agent cannot do these; surface them, never attempt)
 > The irreducible human setup. The agent emits each as a NEW, non-enqueued task
-> linked to the parent (CONTRACT.md §6).
+> linked to the parent (CONTRACT.md §6). The app must also surface + persist
+> these per the onboarding requirement in NOTES.md (pop-up + re-findable checklist).
 
 - [ ] **Register the app identity** — choose a bundle id / application id
       (`<your.bundle.id>`) and create the app record in **App Store Connect**
